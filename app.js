@@ -7,6 +7,7 @@ const bodyParser = require("body-parser");
 const userRoutes = require("./routes/user");
 //middlewares
 app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
 app.use(express.json());
 app.use(cors());
 
