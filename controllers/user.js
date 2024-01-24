@@ -73,7 +73,90 @@ const logIn = async (req, res) => {
   }
 };
 
+const changePassword = async (req, res) => {
+  const { userId } = req.params;
+  try {
+    if (!userId || userId === ":userid") {
+      return response.validationError(
+        res,
+        "Cannot find user without the user id"
+      );
+    }
+    try {
+      const { oldPassword, newPassword } = req.body;
+      if (!oldPassword || !newPassword) {
+        return response.validationError(
+          res,
+          "Cannot change password without proper information"
+        );
+      }
+      const findUser = await userDB.findById({ _id: userId });
+      if (!findUser) return response.notFoundError(res, "Cannot find the user");
+      const comparePassword = await bcrypt.compare(
+        oldPassword,
+        findUser.password
+      );
+      if (!comparePassword) {
+        return response.errorResponse(res, "Incorrect old password", 400);
+      }
+      const hashedPassword = await bcrypt.hash(
+        newPassword,
+        await bcrypt.genSalt(10)
+      );
+      findUser.password = hashedPassword;
+      const updatedUser = await findUser.save();
+      if (!updatedUser) {
+        return response.internalServerError(res, "Failed to update the user");
+      }
+      response.successResponse(
+        res,
+        updatedUser,
+        "Successfully updated the password"
+      );
+    } catch (error) {
+      response.internalServerError(res, "Error occured");
+    }
+  } catch (error) {
+    response.internalServerError(res, error.message || "Internal server error");
+  }
+};
+
+const updateDetails = async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    if (!userId || userId === ":userId") {
+      return response.validationError(
+        res,
+        "Cannot update user details without a userId"
+      );
+    }
+    const { phone, address } = req.body;
+    const findUser = await userDB.findById({ _id: userId });
+    if (!findUser) {
+      return response.notFoundError(res, "Cannot find user");
+    }
+    const updatedData = {
+      ...(phone && { phone: phone }),
+      ...(address && { address: address }),
+    };
+    const updatedUser = await userDB.findByIdAndUpdate(
+      { _id: userId },
+      updatedData,
+      { new: true }
+    );
+    if (!updatedUser) {
+      return response.internalServerError(res, "Cannot update the user");
+    }
+    response.successResponse(res, updatedUser, "Successfully updated the user");
+  } catch (error) {
+    response.internalServerError(res, error.message || "Internal server error");
+  }
+};
+
 module.exports = {
   signUp,
   logIn,
+  changePassword,
+  updateDetails
 };
