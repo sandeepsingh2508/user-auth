@@ -6,8 +6,9 @@ const bodyParser = require("body-parser");
 //routes
 const userRoutes = require("./routes/user");
 //middlewares
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.json({ limit: "50mb" }));
 app.use(express.json());
-app.use(bodyParser.json());
 app.use(cors());
 
 app.use("/api/user", userRoutes);

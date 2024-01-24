@@ -1,6 +1,12 @@
 const userDB = require("../models/user");
+const tokenDB = require("../models/token");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 const response = require("../middlewares/response");
+const sendMail = require("../utils/sendmail");
+const Handlebars = require("handlebars");
+const path = require("path");
+const fs = require("fs");
 const jwt = require("../utils/jwt");
 
 const signUp = async (req, res) => {
@@ -121,6 +127,150 @@ const changePassword = async (req, res) => {
   }
 };
 
+const forgotpassword = async (req, res) => {
+  const { email } = req.body;
+  try {
+    if (!email) {
+      return response.validationError(res, "Please fill in the field");
+    }
+    const user = await userDB.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return response.notFoundError(res, "User not found");
+    } else {
+      const tokenExists = await tokenDB.findOne({ userId: user._id });
+      if (tokenExists) {
+        await tokenDB.deleteOne({ userId: user._id });
+      }
+      const resetToken = crypto.randomBytes(32).toString("hex") + user._id;
+      console.log("resetToken", resetToken);
+      const hashedToken = crypto
+        .createHash("sha256")
+        .update(resetToken)
+        .digest("hex");
+      const savedToken = await new tokenDB({
+        userId: user._id,
+        token: hashedToken,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 30 * (60 * 1000),
+      }).save();
+      const resetUrl = `${process.env.BACKEND_URL}/api/user/reset/${resetToken}`;
+      const __dirname = path.resolve();
+      const templatePath = path.join(
+        __dirname,
+        "template",
+        "forgot-password.html"
+      );
+      const source = fs.readFileSync(templatePath, { encoding: "utf-8" });
+      const template = Handlebars.compile(source);
+      const html = template({
+        USERNAME: user.name,
+        RESETURL: resetUrl,
+      });
+      const mailOptions = {
+        from: `"no-reply" ${process.env.EMAIL}`,
+        to: user.email,
+        subject: "Password change request",
+        html,
+      };
+      try {
+        await sendMail(mailOptions);
+        response.successResponse(res, "", "A reset email has been sent");
+      } catch {
+        response.internalServerError(res, "Not able to send the mail");
+      }
+    }
+  } catch (error) {
+    response.internalServerError(res, error.message || "Internal server error");
+  }
+};
+
+const reset = async (req, res) => {
+  const { resetToken } = req.params;
+  try {
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(resetToken)
+      .digest("hex");
+    const verifyToken = await tokenDB.findOne({
+      token: hashedToken,
+      expiresAt: { $gt: Date.now() },
+    });
+    const __dirname = path.resolve();
+    if (!verifyToken) {
+      const templatePath = path.join(__dirname, "template", "error.html");
+      const source = fs.readFileSync(templatePath, { encoding: "utf-8" });
+      const template = Handlebars.compile(source);
+      const html = template({
+        TITLE: "Password reset token is invalid or has expired.",
+        MESSAGE: "Please reset your password once again.",
+      });
+      return res.send(html);
+    }
+    res.sendFile(path.resolve(__dirname, "template", "reset-password.html"));
+  } catch (error) {
+    console.log(error);
+    response.internalServerError(res, error.message || "Internal server error");
+  }
+};
+
+const resetpassword = async (req, res) => {
+  const { resetToken } = req.params;
+  try {
+    const { password } = req.body;
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(resetToken)
+      .digest("hex");
+    const verifyToken = await tokenDB.findOne({
+      token: hashedToken,
+      expiresAt: { $gt: Date.now() },
+    });
+    const __dirname = path.resolve();
+    if (!verifyToken) {
+      const templatePath = path.join(__dirname, "template", "error.html");
+      const source = fs.readFileSync(templatePath, { encoding: "utf-8" });
+      const template = Handlebars.compile(source);
+      const html = template({
+        TITLE: "Password reset token is invalid or has expired.",
+        MESSAGE: "Please reset your password once again.",
+      });
+      return res.send(html);
+    }
+    const user = await userDB.findOne({ _id: verifyToken.userId });
+    await tokenDB.findByIdAndDelete(verifyToken._id);
+    user.password = await bcrypt.hash(password, await bcrypt.genSalt(10));
+    await user.save();
+    let templatePath = path.join(
+      __dirname,
+      "template",
+      "password-change-confirmation.html"
+    );
+    let source = fs.readFileSync(templatePath, { encoding: "utf-8" });
+    let template = Handlebars.compile(source);
+    let html = template({
+      NAME: user.name,
+      EMAIL: user.email,
+    });
+    const mailOptions = {
+      from: `"no-reply" ${process.env.EMAIL}`,
+      to: user.email,
+      subject: "Your password has been changed",
+      html,
+    };
+    await sendMail(mailOptions);
+    templatePath = path.join(__dirname, "template", "success.html");
+    source = fs.readFileSync(templatePath, { encoding: "utf-8" });
+    template = Handlebars.compile(source);
+    html = template({
+      TITLE: "Your Password has been Updated!",
+      MESSAGE: "Now, You are able to Login.",
+    });
+    res.send(html);
+  } catch (error) {
+    response.internalServerError(res, error.message || "Internal server error");
+  }
+};
+
 const updateDetails = async (req, res) => {
   const { userId } = req.params;
 
@@ -154,9 +304,40 @@ const updateDetails = async (req, res) => {
   }
 };
 
+const getDetails = async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    if (!userId || userId === ":userId") {
+      return response.validationError(
+        res,
+        "Cannot update user details without a userId"
+      );
+    }
+    const findUser = await userDB.findById({ _id: userId });
+    if (!findUser) {
+      return response.notFoundError(res, "Cannot find user");
+    }
+
+    if (!findUser) {
+      return response.internalServerError(res, "Cannot find the user");
+    }
+    response.successResponse(
+      res,
+      findUser,
+      "Successfully find the user details"
+    );
+  } catch (error) {
+    response.internalServerError(res, error.message || "Internal server error");
+  }
+};
 module.exports = {
   signUp,
   logIn,
   changePassword,
-  updateDetails
+  updateDetails,
+  getDetails,
+  forgotpassword,
+  reset,
+  resetpassword,
 };
